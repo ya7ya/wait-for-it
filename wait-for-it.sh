@@ -15,6 +15,7 @@ Usage:
                                 Alternatively, you specify the host and port as host:port
     -s | --strict               Only execute subcommand if the test succeeds
     -q | --quiet                Don't output any status messages
+    -r | --retries              Total number of Retries
     -t TIMEOUT | --timeout=TIMEOUT
                                 Timeout in seconds, zero for no timeout
     -- COMMAND ARGS             Execute command with args after the test finishes
@@ -53,16 +54,24 @@ wait_for_wrapper()
 {
     # In order to support SIGINT during timeout: http://unix.stackexchange.com/a/57692
     if [[ $WAITFORIT_QUIET -eq 1 ]]; then
-        timeout $WAITFORIT_BUSYTIMEFLAG $WAITFORIT_TIMEOUT $0 --quiet --child --host=$WAITFORIT_HOST --port=$WAITFORIT_PORT --timeout=$WAITFORIT_TIMEOUT &
+        # timeout $WAITFORIT_BUSYTIMEFLAG $WAITFORIT_TIMEOUT $0 --quiet --child --host=$WAITFORIT_HOST --port=$WAITFORIT_PORT --timeout=$WAITFORIT_TIMEOUT &
+        curl --silent -f -lSL https://index.docker.io/v1/repositories/$WAITFORIT_HOST/tags/$WAITFORIT_PORT &
     else
-        timeout $WAITFORIT_BUSYTIMEFLAG $WAITFORIT_TIMEOUT $0 --child --host=$WAITFORIT_HOST --port=$WAITFORIT_PORT --timeout=$WAITFORIT_TIMEOUT &
+        # timeout $WAITFORIT_BUSYTIMEFLAG $WAITFORIT_TIMEOUT $0 --child --host=$WAITFORIT_HOST --port=$WAITFORIT_PORT --timeout=$WAITFORIT_TIMEOUT &
+        curl -f -lSL https://index.docker.io/v1/repositories/$WAITFORIT_HOST/tags/$WAITFORIT_PORT &
     fi
     WAITFORIT_PID=$!
     trap "kill -INT -$WAITFORIT_PID" INT
     wait $WAITFORIT_PID
     WAITFORIT_RESULT=$?
     if [[ $WAITFORIT_RESULT -ne 0 ]]; then
-        echoerr "$WAITFORIT_cmdname: timeout occurred after waiting $WAITFORIT_TIMEOUT seconds for $WAITFORIT_HOST:$WAITFORIT_PORT"
+        ((WAITFORIT_CURRENT_RUN++))
+        if [[ WAITFORIT_CURRENT_RUN -lt $WAITFORIT_RETRIES ]]; then
+            sleep $WAITFORIT_TIMEOUT
+            wait_for_wrapper
+        else
+            echoerr "$WAITFORIT_cmdname: no suitable build found after $WAITFORIT_RETRIES x $WAITFORIT_TIMEOUT seconds for $WAITFORIT_HOST:$WAITFORIT_PORT"
+        fi
     fi
     return $WAITFORIT_RESULT
 }
@@ -116,6 +125,15 @@ do
         WAITFORIT_TIMEOUT="${1#*=}"
         shift 1
         ;;
+        -r)
+        WAITFORIT_RETRIES="$2"
+        if [[ $WAITFORIT_RETRIES == "" ]]; then break; fi
+        shift 2
+        ;;
+        --retries=*)
+        WAITFORIT_RETRIES="${1#*=}"
+        shift 1
+        ;;
         --)
         shift
         WAITFORIT_CLI=("$@")
@@ -136,6 +154,8 @@ if [[ "$WAITFORIT_HOST" == "" || "$WAITFORIT_PORT" == "" ]]; then
     usage
 fi
 
+let "WAITFORIT_CURRENT_RUN=0"
+WAITFORIT_RETRIES=${WAITFORIT_RETRIES:-5}
 WAITFORIT_TIMEOUT=${WAITFORIT_TIMEOUT:-15}
 WAITFORIT_STRICT=${WAITFORIT_STRICT:-0}
 WAITFORIT_CHILD=${WAITFORIT_CHILD:-0}
